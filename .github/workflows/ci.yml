@@ -58,7 +58,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python agents/pipeline_rca.py
 
-      # 5️⃣  Security scan on success
+      # 5️⃣  Security scan on success (Docker image)
       - name: Build Docker Image
         if: success()
         run: docker build -t springboot-agentic:latest .
