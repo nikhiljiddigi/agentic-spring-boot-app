@@ -1,25 +1,22 @@
-from dspy import ChainOfThought
-from openai import OpenAI
-import os, subprocess, requests
+import os, subprocess, requests, json
+from dspy import LM
 
-repo = os.getenv("GITHUB_REPOSITORY")
-pr_number = os.getenv("GITHUB_REF").split('/')[-1]
-gh_token = os.getenv("GITHUB_TOKEN")
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+repo   = os.getenv("GITHUB_REPOSITORY")
+token  = os.getenv("GITHUB_TOKEN")
+event  = json.load(open(os.getenv("GITHUB_EVENT_PATH")))
+pr_num = event["number"]
+lm     = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"))
 
-class PRReview(ChainOfThought):
-    def forward(self, diff: str) -> str:
-        self.think("Review the PR diff for style, logging, error handling, and security best practices.")
-        return self.call("Give short actionable comments with bullet points.")
-
-def comment(body):
-    url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-    requests.post(url, headers={"Authorization": f"token {gh_token}"}, json={"body": body})
+def comment(msg):
+    url = f"https://api.github.com/repos/{repo}/issues/{pr_num}/comments"
+    requests.post(url, headers={"Authorization": f"token {token}"}, json={"body": msg})
 
 def main():
     diff = subprocess.check_output(["git", "diff", "HEAD~1..HEAD"]).decode()
-    agent = PRReview()
-    review = agent(diff)
+    prompt = ("You are a senior code reviewer. Review this diff for readability, "
+              "logging, exception handling, and security best practices. "
+              "Provide concise bullet points.")
+    review = lm(prompt + "\n\n" + diff)
     comment(f"🧠 **AI PR Review:**\n\n{review}")
 
 if __name__ == "__main__":

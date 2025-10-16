@@ -1,32 +1,26 @@
-from dspy import ChainOfThought
-from openai import OpenAI
-import os, glob, requests, json
+import os, glob, yaml, json, requests
+from dspy import LM
 
-repo = os.getenv("GITHUB_REPOSITORY")
-pr_number = os.getenv("GITHUB_REF").split('/')[-1]
-gh_token = os.getenv("GITHUB_TOKEN")
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+repo   = os.getenv("GITHUB_REPOSITORY")
+token  = os.getenv("GITHUB_TOKEN")
+event  = json.load(open(os.getenv("GITHUB_EVENT_PATH")))
+pr_num = event["number"]
+lm     = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"))
 
-class PreConfigCheck(ChainOfThought):
-    def forward(self, yaml_text: str) -> str:
-        self.think(f"Check this K8s/Helm YAML for missing limits, labels, or obvious misconfigs:\n{yaml_text}")
-        result = self.call("Summarize only real problems.")
-        return result
-
-def comment_on_pr(body: str):
-    url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-    requests.post(url, headers={"Authorization": f"token {gh_token}"}, json={"body": body})
+def comment(msg):
+    url = f"https://api.github.com/repos/{repo}/issues/{pr_num}/comments"
+    requests.post(url, headers={"Authorization": f"token {token}"}, json={"body": msg})
 
 def main():
     files = glob.glob("**/*.yaml", recursive=True)
     if not files:
-        comment_on_pr("✅ No YAML/Helm files to validate.")
+        comment("✅ No YAML/Helm files to validate.")
         return
-    agent = PreConfigCheck()
     for f in files:
-        with open(f) as fp:
-            out = agent(fp.read())
-            comment_on_pr(f"🛡 **Pre-Config Gate:** findings in `{f}`\n\n{out}")
+        text = open(f).read()
+        prompt = f"Check this Kubernetes/Helm YAML for missing limits, bad labels or risky configs:\n{text}"
+        review = lm(prompt)
+        comment(f"🛡 **Pre-Config Gate:** `{f}`\n\n{review}")
 
 if __name__ == "__main__":
     main()

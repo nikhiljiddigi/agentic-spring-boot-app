@@ -2,28 +2,28 @@ name: Java CI + Agentic DevOps
 
 on:
   push:
-    branches:
-      - '**'
-    tags:
-      - 'v*'
+    branches: ['**']
+    tags: ['v*']
   pull_request:
-    branches:
-      - '**'
+    branches: ['**']
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      # ---------------- Base Setup ----------------
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up JDK 11
         uses: actions/setup-java@v4
         with:
           distribution: zulu
           java-version: '11'
+
+      # 1️⃣  install Python + agent deps
+      - name: Install Python & Agent Deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install openai dspy requests pyyaml
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -35,38 +35,30 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # ---------------- Agentic Pre-Steps ----------------
-      - name: Install Python deps for Agents
-        run: |
-          python -m pip install --upgrade pip
-          pip install openai dspy requests pyyaml
-
+      # 2️⃣  Run PR-stage agents
       - name: Run Pre-Config & PR Reviewer Agents
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          echo "🔍 Running Pre-Config & PR Reviewer Agents"
           python agents/preconfig_gate.py
           python agents/pr_reviewer.py
 
-      # ---------------- Build/Test Stage ----------------
+      # 3️⃣  Build/Test
       - name: Build & Test with Gradle
         id: gradle
         run: ./gradlew clean test | tee build.log
 
-      # ---------------- Pipeline RCA on Failure ----------------
+      # 4️⃣  RCA on failure
       - name: Run Pipeline RCA Agent
         if: failure()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          echo "🚨 Running Pipeline RCA Agent"
-          python agents/pipeline_rca.py
+        run: python agents/pipeline_rca.py
 
-      # ---------------- Security Watcher on Success ----------------
+      # 5️⃣  Security scan on success
       - name: Build Docker Image
         if: success()
         run: docker build -t springboot-agentic:latest .
@@ -84,12 +76,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          echo "🛡️ Running Security Watcher Agent"
-          python agents/security_watcher.py
+        run: python agents/security_watcher.py
 
-      # ---------------- Summary ----------------
-      - name: Workflow Summary
+      - name: Summary
         if: always()
-        run: |
-          echo "✅ Agentic DevOps pipeline finished."
+        run: echo "✅ Agentic DevOps pipeline finished."

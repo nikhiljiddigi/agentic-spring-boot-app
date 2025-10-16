@@ -1,31 +1,23 @@
-from dspy import ChainOfThought
-from openai import OpenAI
-import os, requests, pathlib
+import os, pathlib, requests
+from dspy import LM
 
-repo = os.getenv("GITHUB_REPOSITORY")
-run_id = os.getenv("GITHUB_RUN_ID")
-gh_token = os.getenv("GITHUB_TOKEN")
+repo  = os.getenv("GITHUB_REPOSITORY")
+sha   = os.getenv("GITHUB_SHA")
+token = os.getenv("GITHUB_TOKEN")
+lm    = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"))
 
-class PipelineRCA(ChainOfThought):
-    def forward(self, log_text: str) -> str:
-        self.think("Find the root cause of this Gradle/Maven build failure.")
-        return self.call("Explain cause and possible fix in plain English.")
-
-def comment(body):
-    url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/comments"
-    # fallback: post to PR if run_id endpoint unavailable
-    requests.post(f"https://api.github.com/repos/{repo}/issues/comments",
-                  headers={"Authorization": f"token {gh_token}"}, json={"body": body})
+def comment(msg):
+    url = f"https://api.github.com/repos/{repo}/commits/{sha}/comments"
+    requests.post(url, headers={"Authorization": f"token {token}"}, json={"body": msg})
 
 def main():
-    log_file = pathlib.Path("build.log")
-    if not log_file.exists():
+    log = pathlib.Path("build.log")
+    if not log.exists():
         print("No build.log found")
         return
-    with open(log_file) as fp:
-        text = fp.read()[-6000:]  # last few KB for token limit
-    agent = PipelineRCA()
-    summary = agent(text)
+    text = log.read_text()[-8000:]
+    prompt = "Analyze this Gradle build output. Identify the root cause and suggest a one-line fix."
+    summary = lm(prompt + "\n\n" + text)
     comment(f"🚀 **Pipeline RCA Agent:**\n\n{summary}")
 
 if __name__ == "__main__":

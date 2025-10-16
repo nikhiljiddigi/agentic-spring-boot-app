@@ -1,26 +1,24 @@
-from dspy import ChainOfThought
-import json, os, requests
+import os, json, requests
+from dspy import LM
 
-repo = os.getenv("GITHUB_REPOSITORY")
-ref = os.getenv("GITHUB_REF")
-gh_token = os.getenv("GITHUB_TOKEN")
+repo  = os.getenv("GITHUB_REPOSITORY")
+sha   = os.getenv("GITHUB_SHA")
+token = os.getenv("GITHUB_TOKEN")
+lm    = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"))
 
-class CVEExplain(ChainOfThought):
-    def forward(self, cve_json: str) -> str:
-        self.think("Summarize critical and high CVEs and suggest upgrade paths.")
-        return self.call("Output short table with package, CVE, fix version.")
-
-def comment(body):
-    url = f"https://api.github.com/repos/{repo}/commits/{ref}/comments"
-    requests.post(url, headers={"Authorization": f"token {gh_token}"}, json={"body": body})
+def comment(msg):
+    url = f"https://api.github.com/repos/{repo}/commits/{sha}/comments"
+    requests.post(url, headers={"Authorization": f"token {token}"}, json={"body": msg})
 
 def main():
     if not os.path.exists("trivy-report.json"):
+        print("No Trivy report found")
         return
-    data = json.load(open("trivy-report.json"))
-    agent = CVEExplain()
-    result = agent(json.dumps(data))
-    comment(f"🔐 **Security Watcher:**\n\n{result}")
+    report = json.load(open("trivy-report.json"))
+    prompt = ("Given this Trivy scan JSON, list only critical and high CVEs, "
+              "affected packages, and recommended fix versions in bullet points.")
+    summary = lm(prompt + "\n\n" + json.dumps(report)[:12000])
+    comment(f"🔐 **Security Watcher:**\n\n{summary}")
 
 if __name__ == "__main__":
     main()
