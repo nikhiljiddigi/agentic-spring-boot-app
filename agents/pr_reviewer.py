@@ -1,23 +1,97 @@
-import os, subprocess, requests, json
-from dspy import LM
+import os, json, re, requests
+from openai import OpenAI
+import dspy
 
-repo   = os.getenv("GITHUB_REPOSITORY")
-token  = os.getenv("GITHUB_TOKEN")
-event  = json.load(open(os.getenv("GITHUB_EVENT_PATH")))
-pr_num = event["number"]
-lm     = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"), temperature=1.0, max_tokens=16000)
+# --- SETUP ENV ---
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+REPO = os.getenv("GITHUB_REPOSITORY")
+EVENT_PATH = os.getenv("GITHUB_EVENT_PATH")
+BOT_NAME = "agentic-ai-reviewer"
+HEADERS = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
 
-def comment(msg):
-    url = f"https://api.github.com/repos/{repo}/issues/{pr_num}/comments"
-    requests.post(url, headers={"Authorization": f"token {token}"}, json={"body": msg})
+# --- LOAD EVENT ---
+with open(EVENT_PATH, "r") as f:
+    event = json.load(f)
+pr = event.get("pull_request", {})
+pr_number = pr.get("number")
 
-def main():
-    diff = subprocess.check_output(["git", "diff", "HEAD~1..HEAD"]).decode()
-    prompt = ("You are a senior code reviewer. Review this diff for readability, "
-              "logging, exception handling, and security best practices. "
-              "Provide concise bullet points.")
-    review = lm(prompt + "\n\n" + diff)
-    comment(f"🧠 **AI PR Review:**\n\n{review}")
+# --- FETCH FILE DIFFS ---
+files = requests.get(f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/files", headers=HEADERS).json()
 
-if __name__ == "__main__":
-    main()
+# --- FETCH EXISTING COMMENTS ---
+existing_comments = requests.get(f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/comments", headers=HEADERS).json()
+existing_lines = {(c["path"], c["line"]) for c in existing_comments if c["user"]["login"] == BOT_NAME}
+
+# --- INIT LLM ---
+client = OpenAI(api_key=OPENAI_KEY)
+
+class IncrementalReviewer(dspy.Module):
+    def forward(self, filename, diff):
+        prompt = f"""
+        You are an expert code reviewer (like GitHub Copilot).
+        Analyze this Git diff for potential bugs, anti-patterns, or improvements.
+        Respond only for changed lines that introduce or modify logic.
+
+        Diff (file: {filename}):
+        {diff}
+
+        Respond in JSON as:
+        [
+          {{"line": <line_number>, "comment": "<clear feedback>"}},
+          ...
+        ]
+        Only include changed lines that genuinely need review.
+        """
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+        )
+        try:
+            return json.loads(response.choices[0].message.content)
+        except Exception:
+            return []
+
+reviewer = IncrementalReviewer()
+
+# --- PROCESS EACH FILE ---
+new_comments = []
+for f in files:
+    filename = f["filename"]
+    patch = f.get("patch", "")
+    if not patch:
+        continue
+
+    # Run model
+    review_suggestions = reviewer.forward(filename, patch)
+
+    # Filter already-commented lines
+    for r in review_suggestions:
+        line = r.get("line")
+        if (filename, line) not in existing_lines:
+            new_comments.append({
+                "path": filename,
+                "line": line,
+                "body": f"💡 {r['comment']}"
+            })
+
+# --- POST COMMENTS ---
+for c in new_comments:
+    requests.post(
+        f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/comments",
+        headers=HEADERS,
+        data=json.dumps(c),
+    )
+
+# --- POST / UPDATE SUMMARY COMMENT ---
+summary = f"""
+### 🤖 Agentic Reviewer Summary
+Reviewed {len(files)} file(s), posted {len(new_comments)} new comments.
+Mode: Incremental (diff-based)
+"""
+requests.post(
+    f"https://api.github.com/repos/{REPO}/issues/{pr_number}/comments",
+    headers=HEADERS,
+    data=json.dumps({"body": summary}),
+)
