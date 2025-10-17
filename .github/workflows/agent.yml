@@ -1,0 +1,47 @@
+name: Agentic Reviewer Bot
+
+on:
+  pull_request:
+    types: [review_requested, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  agent-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log raw GitHub event payload
+        run: |
+          echo "===== GITHUB_EVENT_PATH ====="
+          cat $GITHUB_EVENT_PATH
+          echo "=============================="
+
+      - name: Extract and show requested reviewer
+        id: extract
+        run: |
+          echo "Reviewer login is:"
+          cat $GITHUB_EVENT_PATH | jq -r '.requested_reviewer.login'
+
+      - name: Set up Python
+        if: contains(toJson(github.event), 'agentic-ai-reviewer')
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: contains(toJson(github.event), 'agentic-ai-reviewer')
+        run: |
+          python -m pip install --upgrade pip
+          pip install openai dspy requests pyyaml
+
+      - name: Run Agentic Review
+        if: contains(toJson(github.event), 'agentic-ai-reviewer')
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
+        run: python agents/pr_reviewer.py

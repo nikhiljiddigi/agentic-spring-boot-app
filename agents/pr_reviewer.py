@@ -5,7 +5,7 @@ repo   = os.getenv("GITHUB_REPOSITORY")
 token  = os.getenv("GITHUB_TOKEN")
 event  = json.load(open(os.getenv("GITHUB_EVENT_PATH")))
 pr_num = event["number"]
-lm     = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"))
+lm     = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"), temperature=1.0, max_tokens=16000)
 
 def comment(msg):
     url = f"https://api.github.com/repos/{repo}/issues/{pr_num}/comments"

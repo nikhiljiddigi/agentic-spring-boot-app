@@ -4,7 +4,7 @@ from dspy import LM
 repo  = os.getenv("GITHUB_REPOSITORY")
 sha   = os.getenv("GITHUB_SHA")
 token = os.getenv("GITHUB_TOKEN")
-lm    = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"))
+lm    = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"), temperature=1.0, max_tokens=16000)
 
 def comment(msg):
     url = f"https://api.github.com/repos/{repo}/commits/{sha}/comments"
