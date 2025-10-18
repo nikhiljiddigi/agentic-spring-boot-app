@@ -2,7 +2,7 @@ import os, glob, yaml, json, requests
 from dspy import LM
 
 repo   = os.getenv("GITHUB_REPOSITORY")
-token  = os.getenv("GITHUB_TOKEN")
+token  = os.getenv("GH_BOT_TOKEN")
 event  = json.load(open(os.getenv("GITHUB_EVENT_PATH")))
 pr_num = event["number"]
 lm     = LM(model="gpt-5", api_key=os.getenv("OPENAI_API_KEY"), temperature=1.0, max_tokens=16000)

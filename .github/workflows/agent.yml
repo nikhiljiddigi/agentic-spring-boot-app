@@ -7,6 +7,7 @@ on:
 permissions:
   pull-requests: write
   contents: read
+  issues: write
 
 jobs:
   agent-review:
@@ -20,6 +21,14 @@ jobs:
           echo "===== GITHUB_EVENT_PATH ====="
           cat $GITHUB_EVENT_PATH
           echo "=============================="
+      - name: Check current token permissions
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_BOT_TOKEN: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
+        run: |
+          curl -s -H "Authorization: token $GH_BOT_TOKEN" \
+              https://api.github.com/repos/${GITHUB_REPOSITORY} \
+              | jq '.permissions'
 
       - name: Extract and show requested reviewer
         id: extract
@@ -43,5 +52,5 @@ jobs:
         if: contains(toJson(github.event), 'agentic-ai-reviewer')
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
+          GH_BOT_TOKEN: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
         run: python agents/pr_reviewer.py

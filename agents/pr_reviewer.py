@@ -1,97 +1,106 @@
+#!/usr/bin/env python3
 import os, json, re, requests
 from openai import OpenAI
 import dspy
 
-# --- SETUP ENV ---
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-REPO = os.getenv("GITHUB_REPOSITORY")
-EVENT_PATH = os.getenv("GITHUB_EVENT_PATH")
-BOT_NAME = "agentic-ai-reviewer"
-HEADERS = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+# --- ENV ---
+GH_BOT_TOKEN = os.getenv("GH_BOT_TOKEN")
+OPENAI_KEY   = os.getenv("OPENAI_API_KEY")
+REPO         = os.getenv("GITHUB_REPOSITORY")
+EVENT_PATH   = os.getenv("GITHUB_EVENT_PATH")
+BOT_NAME     = "agentic-ai-reviewer"
 
-# --- LOAD EVENT ---
-with open(EVENT_PATH, "r") as f:
+HEADERS = {
+    "Authorization": f"token {GH_BOT_TOKEN}",
+    "Accept": "application/vnd.github+json"
+}
+
+with open(EVENT_PATH) as f:
     event = json.load(f)
 pr = event.get("pull_request", {})
 pr_number = pr.get("number")
 
-# --- FETCH FILE DIFFS ---
-files = requests.get(f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/files", headers=HEADERS).json()
+print(f"🔍 Running Agentic Reviewer on PR #{pr_number} in {REPO}")
 
-# --- FETCH EXISTING COMMENTS ---
-existing_comments = requests.get(f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/comments", headers=HEADERS).json()
-existing_lines = {(c["path"], c["line"]) for c in existing_comments if c["user"]["login"] == BOT_NAME}
+# --- FETCH FILES + EXISTING COMMENTS ---
+files = requests.get(
+    f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/files",
+    headers=HEADERS).json()
+existing = requests.get(
+    f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/comments",
+    headers=HEADERS).json()
 
-# --- INIT LLM ---
+existing_lines = {(c["path"], c["line"])
+                  for c in existing
+                  if c.get("user", {}).get("login", "").lower() == BOT_NAME.lower()}
+
+# --- INIT LLM + DSPy ---
 client = OpenAI(api_key=OPENAI_KEY)
 
-class IncrementalReviewer(dspy.Module):
+class CodeReviewReasoner(dspy.Module):
     def forward(self, filename, diff):
         prompt = f"""
-        You are an expert code reviewer (like GitHub Copilot).
-        Analyze this Git diff for potential bugs, anti-patterns, or improvements.
-        Respond only for changed lines that introduce or modify logic.
-
-        Diff (file: {filename}):
+        You are an expert code reviewer.
+        Review this Git diff for issues or improvements.
+        Respond *only* in valid JSON list format:
+        [{{"line": <number>, "comment": "<feedback>"}}]
+        File: {filename}
+        Diff:
         {diff}
-
-        Respond in JSON as:
-        [
-          {{"line": <line_number>, "comment": "<clear feedback>"}},
-          ...
-        ]
-        Only include changed lines that genuinely need review.
         """
-        response = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
-        )
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.3)
+        raw = resp.choices[0].message.content.strip()
+
+        # --- Strip code-block fences like ```json ... ```
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+        cleaned = re.sub(r"```$", "", cleaned).strip()
+
         try:
-            return json.loads(response.choices[0].message.content)
-        except Exception:
+            data = json.loads(cleaned)
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            print(f"⚠️ Could not parse JSON for {filename}: {e}\n{cleaned[:200]}")
             return []
 
-reviewer = IncrementalReviewer()
+reviewer = CodeReviewReasoner()
 
-# --- PROCESS EACH FILE ---
+# --- RUN REVIEW ---
 new_comments = []
 for f in files:
-    filename = f["filename"]
-    patch = f.get("patch", "")
-    if not patch:
-        continue
+    filename, patch = f["filename"], f.get("patch", "")
+    if not patch: continue
+    print(f"\n📄 Reviewing {filename}")
+    for s in reviewer(filename, patch):     # ✅ dspy preferred call style
+        line, comment = s.get("line"), s.get("comment","").strip()
+        if not line or not comment: continue
+        if (filename, line) in existing_lines: continue
+        new_comments.append({"path":filename,"line":line,"side":"RIGHT","body":f"💡 {comment}"})
 
-    # Run model
-    review_suggestions = reviewer.forward(filename, patch)
+print(f"\n🧠 New comments: {len(new_comments)}")
 
-    # Filter already-commented lines
-    for r in review_suggestions:
-        line = r.get("line")
-        if (filename, line) not in existing_lines:
-            new_comments.append({
-                "path": filename,
-                "line": line,
-                "body": f"💡 {r['comment']}"
-            })
-
-# --- POST COMMENTS ---
+# --- POST INLINE COMMENTS ---
 for c in new_comments:
-    requests.post(
+    r = requests.post(
         f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/comments",
-        headers=HEADERS,
-        data=json.dumps(c),
-    )
+        headers=HEADERS, json=c)
+    print("✅" if r.ok else f"❌ {r.status_code}: {r.text[:200]}")
 
 # --- POST / UPDATE SUMMARY COMMENT ---
-summary = f"""
-### 🤖 Agentic Reviewer Summary
-Reviewed {len(files)} file(s), posted {len(new_comments)} new comments.
-Mode: Incremental (diff-based)
-"""
-requests.post(
-    f"https://api.github.com/repos/{REPO}/issues/{pr_number}/comments",
-    headers=HEADERS,
-    data=json.dumps({"body": summary}),
+summary_body = (
+    f"### 🤖 Agentic Reviewer Summary\n"
+    f"**Mode:** Incremental (diff-based)\n"
+    f"**Files Reviewed:** {len(files)}\n"
+    f"**New Comments Added:** {len(new_comments)}\n\n"
+    "Agentic Reviewer automatically analyzes diffs using OpenAI + DSPy reasoning."
 )
+
+# use /issues/:number/comments, not /issues/comments
+resp = requests.post(
+    f"https://api.github.com/repos/{REPO}/issues/{pr_number}/comments",
+    headers=HEADERS, json={"body": summary_body})
+print(f"📝 Summary status: {resp.status_code} {resp.text[:120]}")
+
+print("✅ Agentic Reviewer finished.")
