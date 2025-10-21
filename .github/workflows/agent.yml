@@ -2,10 +2,12 @@ name: Agentic PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, review_requested]
 
 jobs:
   review:
+    # ✅ Only run when our agent is added as reviewer
+    # if: contains(github.event.pull_request.labels.*.name, 'agentic-ai-review')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -22,13 +24,16 @@ jobs:
 
       - name: 📦 Install dependencies
         run: |
-          pip install dspy github requests
+          pip install --upgrade pip setuptools wheel
+          pip install --only-binary=:all: "aiohttp>=3.9.5"
+          pip install dspy PyGithub requests
 
       - name: 🤖 Run Agentic PR Reviewer
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          python pr_agent.py
+          python agents/pr_reviewer.py

@@ -5,26 +5,15 @@ import requests
 from github import Github
 import dspy
 
-# =========================================================
-# DSPy Signatures for Code Review and Security Reasoning
-# =========================================================
-
+# --------------------------------------
+# DSPy Signature + File Review Module
+# --------------------------------------
 class ReviewFileContent(dspy.Signature):
-    """AI signature for file-level code review"""
-    file_content = dspy.InputField(desc="Full file content to review.")
+    file_content = dspy.InputField(desc="The complete file content to review.")
     filename = dspy.InputField(desc="The name of the file being reviewed.")
-    patch_diff = dspy.InputField(desc="Git patch showing changed lines.")
-    review_comments = dspy.OutputField(desc="JSON array of comments [{'line': int, 'comment': str}].")
+    patch_diff = dspy.InputField(desc="The git patch showing what changed.")
+    review_comments = dspy.OutputField(desc="JSON array of review comments with line numbers, format: [{'line': number, 'comment': 'suggestion text'}]")
 
-class SecurityAdvisor(dspy.Signature):
-    """AI signature for reasoning about detected vulnerabilities"""
-    findings = dspy.InputField(desc="List of detected security issues, CVEs, or secrets.")
-    file_context = dspy.InputField(desc="Relevant code or dependency snippet.")
-    review_recommendations = dspy.OutputField(desc="AI-generated security analysis and recommendations.")
-
-# =========================================================
-# DSPy Modules
-# =========================================================
 
 class FileReviewer(dspy.Module):
     def __init__(self):
@@ -33,65 +22,29 @@ class FileReviewer(dspy.Module):
 
     def forward(self, file_content, filename, patch_diff):
         result = self.predict(file_content=file_content, filename=filename, patch_diff=patch_diff)
-        return result.review_comments
+        return result.review_comments or []
 
-class SecurityReviewer(dspy.Module):
-    def __init__(self):
-        super().__init__()
-        self.analyze = dspy.Predict(SecurityAdvisor)
 
-    def forward(self, findings, file_context):
-        result = self.analyze(findings=findings, file_context=file_context)
-        return result.review_recommendations
-
-# =========================================================
-# Security Scanning Logic (Gradle, Maven, Python)
-# =========================================================
-
-def parse_dependencies(file_obj, content):
-    """Parse Gradle, Maven, and Python dependencies."""
+# --------------------------------------
+# Security Scanner Functions
+# --------------------------------------
+def parse_requirements_content(content):
+    """Parse requirements from string content"""
     deps = []
-
-    # Python (requirements.txt)
-    if file_obj.filename.endswith(('requirements.txt', 'requirements-dev.txt', 'requirements-test.txt')):
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if '==' in line:
-                name, version = line.split('==', 1)
-                deps.append((name.strip(), version.strip(), 'PyPI'))
-
-    # Gradle / Kotlin DSL
-    elif file_obj.filename.endswith(('build.gradle', 'build.gradle.kts')):
-        pattern = r'(?:implementation|api|compile|runtimeOnly|testImplementation)\s+["\']([^:"\']+):([^:"\']+):([^:"\']+)["\']'
-        for match in re.findall(pattern, content):
-            group, artifact, version = match
-            name = f"{group}:{artifact}"
-            deps.append((name, version, 'Maven'))
-
-    # Maven (pom.xml)
-    elif file_obj.filename.endswith('pom.xml'):
-        import xml.etree.ElementTree as ET
-        try:
-            root = ET.fromstring(content)
-            ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
-            for dep in root.findall('.//m:dependency', ns):
-                group = dep.find('m:groupId', ns)
-                artifact = dep.find('m:artifactId', ns)
-                version = dep.find('m:version', ns)
-                if group is not None and artifact is not None and version is not None:
-                    name = f"{group.text}:{artifact.text}"
-                    deps.append((name, version.text, 'Maven'))
-        except Exception as e:
-            print(f"⚠️ Error parsing pom.xml: {e}")
-
+    for line in content.split('\n'):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "==" in line:
+            name, version = line.split("==", 1)
+            deps.append((name.strip(), version.strip()))
     return deps
 
-def fetch_cves(name, version, ecosystem='Maven'):
-    """Fetch CVE info from OSV.dev"""
+
+def fetch_cves(name, version):
+    """Fetch CVE information for a package from OSV"""
     OSV_API = "https://api.osv.dev/v1/query"
-    payload = {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
+    payload = {"package": {"name": name, "ecosystem": "PyPI"}, "version": version}
     try:
         r = requests.post(OSV_API, json=payload, timeout=8)
         if r.status_code == 200:
@@ -103,11 +56,12 @@ def fetch_cves(name, version, ecosystem='Maven'):
                 results.append((v.get("id", "Unknown"), sev, desc))
             return results
     except Exception as e:
-        print(f"⚠️ Failed CVE lookup for {name}: {e}")
+        print(f"⚠️  Failed CVE lookup for {name}: {e}")
     return []
 
+
 def scan_content_for_secrets(content, filename):
-    """Detect hardcoded secrets or tokens"""
+    """Scan file content for hardcoded secrets"""
     patterns = [
         (r"AKIA[0-9A-Z]{16}", "AWS access key"),
         (r"(?i)token\s*=\s*['\"][A-Za-z0-9\-_\.]{8,}['\"]", "Token detected"),
@@ -117,69 +71,77 @@ def scan_content_for_secrets(content, filename):
         (r"(?i)secret[_-]?key\s*=\s*['\"][A-Za-z0-9\-_\.]{8,}['\"]", "Secret key detected"),
     ]
     findings = []
-    for i, line in enumerate(content.split('\n'), 1):
+    lines = content.split('\n')
+    for i, line in enumerate(lines, 1):
         for pat, msg in patterns:
             if re.search(pat, line):
-                findings.append({'line': i, 'message': msg, 'content': line.strip()})
+                findings.append({
+                    'line': i,
+                    'message': msg,
+                    'content': line.strip()
+                })
     return findings
 
-def check_security_vulnerabilities(file_obj, file_content, security_reviewer=None):
-    """Hybrid rule-based + AI security scanner."""
+
+def check_security_vulnerabilities(file_obj, file_content):
+    """Check for dependency & secret vulnerabilities"""
     security_comments = []
 
-    # Step 1: Dependency CVEs
-    deps = parse_dependencies(file_obj, file_content)
-    for name, version, ecosystem in deps:
-        vulns = fetch_cves(name, version, ecosystem)
-        for vuln_id, severity, desc in vulns:
-            for i, line in enumerate(file_content.splitlines(), 1):
-                if name.split(':')[-1] in line and version in line:
-                    base_comment = (
-                        f"🚨 **Security Vulnerability Detected**\n"
-                        f"**Ecosystem**: {ecosystem}\n"
-                        f"**Package**: {name} {version}\n"
-                        f"**Vulnerability ID**: {vuln_id}\n"
-                        f"**Severity**: {severity}\n"
-                        f"**Description**: {desc}\n"
-                    )
-                    if security_reviewer:
-                        ai_context = [{'package': name, 'version': version, 'vuln_id': vuln_id, 'desc': desc}]
-                        ai_feedback = security_reviewer(findings=ai_context, file_context=line)
-                        base_comment += f"\n🤖 **AI Insight**: {ai_feedback}"
-                    security_comments.append({'line': i, 'comment': base_comment})
-                    break
+    # Dependency CVEs
+    if file_obj.filename.endswith(('requirements.txt', 'requirements-dev.txt', 'requirements-test.txt')):
+        deps = parse_requirements_content(file_content)
+        for name, version in deps:
+            vulns = fetch_cves(name, version)
+            for vuln_id, severity, desc in vulns:
+                for i, line in enumerate(file_content.split('\n'), 1):
+                    if f"{name}==" in line:
+                        security_comments.append({
+                            'line': i,
+                            'comment': (
+                                f"🚨 **Security Vulnerability**: {vuln_id}\n"
+                                f"**Package**: {name} {version}\n"
+                                f"**Severity**: {severity}\n"
+                                f"**Description**: {desc}\n"
+                                f"**Recommendation**: Upgrade to a newer version."
+                            )
+                        })
+                        break
 
-    # Step 2: Secret Detection
+    # Hardcoded secrets
     secrets = scan_content_for_secrets(file_content, file_obj.filename)
     for secret in secrets:
-        comment = (
-            f"🔐 **Security Risk**: {secret['message']}\n"
-            f"**Found**: `{secret['content']}`\n"
-            f"**Recommendation**: Remove hardcoded credentials and use env vars."
-        )
-        if security_reviewer:
-            ai_feedback = security_reviewer(findings=[secret], file_context=secret['content'])
-            comment += f"\n\n🤖 **AI Insight**: {ai_feedback}"
-        security_comments.append({'line': secret['line'], 'comment': comment})
+        security_comments.append({
+            'line': secret['line'],
+            'comment': (
+                f"🔐 **Security Risk**: {secret['message']}\n"
+                f"**Found**: `{secret['content']}`\n"
+                f"**Recommendation**: Remove hardcoded credentials and use environment variables."
+            )
+        })
 
     return security_comments
 
-# =========================================================
-# Review Parsing Utils
-# =========================================================
+
+# --------------------------------------
+# Review Logic
+# --------------------------------------
+reviewer = FileReviewer()
+
 
 def get_file_content(file_obj, repo, commit_id):
     try:
-        content = repo.get_contents(file_obj.filename, ref=commit_id)
-        return content.decoded_content.decode('utf-8')
+        file_content = repo.get_contents(file_obj.filename, ref=commit_id)
+        return file_content.decoded_content.decode('utf-8')
     except Exception as e:
-        print(f"⚠️ Could not fetch content for {file_obj.filename}: {e}")
+        print(f"⚠️ Could not fetch {file_obj.filename}: {e}")
         return ""
 
+
 def get_changed_lines(patch):
-    changed = []
+    changed_lines = []
     lines = patch.split('\n')
     current_line = 0
+
     for line in lines:
         if line.startswith('@@'):
             parts = line.split(' ')
@@ -188,113 +150,144 @@ def get_changed_lines(patch):
                 new_start = new_info.split(',')[0][1:] if ',' in new_info else new_info[1:]
                 current_line = int(new_start) if new_start.isdigit() else 1
         elif line.startswith('+') and not line.startswith('+++'):
-            changed.append(current_line)
+            changed_lines.append(current_line)
             current_line += 1
         elif not line.startswith('-') and not line.startswith('@@'):
             current_line += 1
-    return changed
+
+    return changed_lines
+
 
 def parse_review_comments(review_output, filename, patch):
     comments = []
     changed_lines = get_changed_lines(patch)
+
     try:
-        review_data = json.loads(review_output) if review_output.strip().startswith('[') else []
+        review_data = (
+            json.loads(review_output)
+            if isinstance(review_output, str) and review_output.strip().startswith('[')
+            else review_output
+        )
+
         for item in review_data:
             if isinstance(item, dict) and 'line' in item and 'comment' in item:
                 if int(item['line']) in changed_lines:
-                    comments.append({'body': item['comment'], 'path': filename, 'line': int(item['line'])})
-    except Exception:
-        pass
+                    comments.append({
+                        'body': f"💡 **Agentic AI Bot Review**:\n{item['comment']}",
+                        'path': filename,
+                        'line': int(item['line'])
+                    })
+    except Exception as e:
+        print(f"⚠️ Error parsing review comments: {e}")
     return comments
 
-# =========================================================
-# Main Agent Runner
-# =========================================================
+import concurrent.futures
+def delete_previous_bot_comments(pr):
+    print("🧹 Cleaning up previous bot comments...")
+    """
+    ⚡ Deletes all previous bot comments (review + issue)
+    using concurrent threads for speed.
+    """
+    marker = "🤖 Automated Code Review"
+    bot_usernames = {"agentic-ai-bot", "github-bot", "action-bot"}
 
-def run_review(repo_name, github_token, openai_key, pr_number):
-    print("🚀 Starting Agentic PR Review...")
+    review_comments = list(pr.get_review_comments())
+    issue_comments = list(pr.get_issue_comments())
 
-    # DSPy setup
-    gemini_lm = dspy.LM("gemini/gemini-2.5-flash", api_key=openai_key)
+    all_comments = [
+        c for c in (review_comments + issue_comments)
+        if (marker in (c.body or "")) or (c.user.login in bot_usernames)
+    ]
+
+    if not all_comments:
+        print("✅ No old bot comments found.")
+        return
+
+    print(f"🧹 Found {len(all_comments)} bot comments to delete...")
+
+    def delete_comment(c):
+        try:
+            c.delete()
+            return f"✅ Deleted comment {c.id}"
+        except Exception as e:
+            return f"⚠️ Failed to delete {c.id}: {e}"
+
+    # Run deletes concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        for result in executor.map(delete_comment, all_comments):
+            print(result)
+
+    print("✅ All previous bot comments deleted.")
+
+
+# --------------------------------------
+# PR Agent Runner (with Gemini Model)
+# --------------------------------------
+def run_pr_agent():
+    gemini_key = os.getenv('GEMINI_API_KEY')
+    github_token = os.getenv('GITHUB_TOKEN')
+    repo_name = os.getenv('GITHUB_REPOSITORY')
+    pr_number = int(os.getenv('PR_NUMBER', '1'))
+
+    if not gemini_key or not github_token:
+        raise EnvironmentError("❌ Missing required environment variables: GEMINI_API_KEY and GITHUB_TOKEN")
+    
+    if not pr_number:
+        raise EnvironmentError("❌ Missing PR_NUMBER. Ensure you export it in your GitHub Action.")
+    if not repo_name:
+        raise EnvironmentError("❌ Missing GITHUB_REPOSITORY. Ensure you export it in your GitHub Action.")
+
+    # ✅ DSPy configured with Gemini LLM
+    gemini_lm = dspy.LM("gemini/gemini-2.5-flash", api_key=gemini_key)
     dspy.configure(lm=gemini_lm)
 
-    reviewer = FileReviewer()
-    security_reviewer = SecurityReviewer()
-
-    # GitHub setup
     g = Github(github_token)
     repo = g.get_repo(repo_name)
     pr = repo.get_pull(pr_number)
-    commit_id = pr.head.sha
-    files = pr.get_files()
 
     all_comments = []
     security_summary = []
 
-    for file in files:
+    for file in pr.get_files():
         if not file.patch:
             continue
 
         print(f"🔍 Reviewing {file.filename}...")
-        file_content = get_file_content(file, repo, commit_id)
+        file_content = get_file_content(file, repo, pr.head.sha)
         if not file_content:
             continue
 
-        # Security scan
-        sec_comments = check_security_vulnerabilities(file, file_content, security_reviewer)
+        # --- Security scan ---
+        sec_comments = check_security_vulnerabilities(file, file_content)
+        for sc in sec_comments:
+            all_comments.append({'path': file.filename, 'line': sc['line'], 'body': sc['comment']})
         if sec_comments:
-            security_summary.append(f"**{file.filename}**: {len(sec_comments)} issues")
-            all_comments.extend([{'body': c['comment'], 'path': file.filename, 'line': c['line']} for c in sec_comments])
+            security_summary.append(f"{file.filename}: {len(sec_comments)} issues found")
 
-        # Code review (skip docs/config)
-        if not file.filename.endswith(('.md', '.txt', '.yml', '.yaml', '.json')):
-            review_output = reviewer(file_content=file_content, filename=file.filename, patch_diff=file.patch)
-            parsed_comments = parse_review_comments(review_output, file.filename, file.patch)
-            all_comments.extend(parsed_comments)
+        # --- AI Review ---
+        if not file.filename.endswith(('.md', '.txt', '.json', '.yml', '.yaml')):
+            review_output = reviewer(file_content, file.filename, file.patch)
+            comments = parse_review_comments(review_output, file.filename, file.patch)
+            all_comments.extend(comments)
 
-    # Post to GitHub
+    # --- Post PR Review ---
     if all_comments:
-        summary = "🤖 **Agentic PR Review Summary**\n\n"
+        body = "🤖 **Automated Code Review Summary**\n\n"
         if security_summary:
-            summary += "🚨 **Security Findings:**\n" + "\n".join(f"- {s}" for s in security_summary) + "\n\n"
-        summary += "🧠 AI-driven feedback and recommendations added inline."
+            body += "🚨 **Security Issues Found**:\n" + "\n".join(f"- {s}" for s in security_summary) + "\n\n"
+        body += "🧠 **Code Quality Suggestions** are posted inline below.\n"
 
         try:
-            pr.create_review(body=summary, event="COMMENT", comments=all_comments)
-            print("✅ Review posted successfully!")
+            delete_previous_bot_comments(pr)
+            pr.create_review(body=body, event="COMMENT", comments=all_comments)
+            return "✅ PR Review posted successfully!"
         except Exception as e:
-            print(f"⚠️ Inline review failed: {e}")
-            fallback = summary + "\n\n**Comments:**\n" + "\n".join([f"- {c['path']} (L{c['line']}): {c['body']}" for c in all_comments])
-            pr.create_issue_comment(fallback)
-            print("✅ Posted as general PR comment instead.")
+            print(f"⚠️ PR review failed: {e}")
+            pr.create_issue_comment(body=body + "\n\n" + json.dumps(all_comments, indent=2))
+            return "✅ Posted as general PR comment."
     else:
-        print("✅ No issues found!")
-
-# =========================================================
-# Entrypoint (GitHub Actions Compatible)
-# =========================================================
-
-def run_pr_agent():
-    print("⚙️ Detecting GitHub environment...")
-
-    repo_name = os.getenv("GITHUB_REPOSITORY")
-    github_token = os.getenv("GITHUB_TOKEN")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    event_path = os.getenv("GITHUB_EVENT_PATH")
-
-    if not all([repo_name, github_token, openai_key, event_path]):
-        raise ValueError("❌ Missing one of required env vars: GITHUB_REPOSITORY, GITHUB_TOKEN, OPENAI_API_KEY, GITHUB_EVENT_PATH")
-
-    with open(event_path, "r") as f:
-        event = json.load(f)
-        pr_number = event.get("number") or event.get("pull_request", {}).get("number")
-
-    if not pr_number:
-        raise ValueError("❌ Could not detect PR number from GITHUB_EVENT_PATH")
-
-    print(f"📦 Repo: {repo_name}")
-    print(f"🔢 PR Number: {pr_number}")
-    run_review(repo_name, github_token, openai_key, pr_number)
-
+        return "✅ No issues found in PR diff."
+    
 if __name__ == "__main__":
-    run_pr_agent()
+    result = run_pr_agent()
+    print(result)
