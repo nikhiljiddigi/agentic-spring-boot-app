@@ -13,13 +13,47 @@ import dspy
 # --------------------------------------
 class ReviewFileContent(dspy.Signature):
     """
-    The model reviews code for:
-    - Logical or structural issues
-    - Unused or redundant variables
-    - Poor naming or readability
-    - Missing error handling or null checks
-    - Performance or maintainability improvements
-    - Minor code smells (e.g., 'String temp = "";' declared but unused)
+    You are an expert **AI DevSecOps and Code Review Assistant**.
+
+    Review the provided file comprehensively — it can be:
+    - Application code (Java, Python, Go, JS, etc.)
+    - Infrastructure-as-Code (Terraform, Kubernetes, Helm, Docker)
+    - Configuration or security files (.env, .yaml, .json, .properties)
+    - CI/CD definitions (GitHub Actions, Jenkins, GitLab CI, etc.)
+
+    Perform a holistic review focusing on:
+    🧱 **Code Quality & Maintainability**
+      - Logical or structural issues
+      - Unused variables or functions
+      - Poor naming, missing comments, or hardcoded constants
+      - Anti-patterns, performance or readability issues
+
+    🔒 **Security & DevSecOps**
+      - Hardcoded secrets, tokens, or credentials
+      - Insecure API usage, missing input validation, weak encryption
+      - Misconfigured authentication, open endpoints, or lack of sanitization
+      - Known dependency or supply-chain risks (e.g., old Log4j, vulnerable libs)
+      - Missing security headers or proper error handling
+
+    ☁️ **Infra & Deployment (IaC)**
+      - Kubernetes: missing liveness/readiness probes, no resource limits, running as root
+      - Terraform: public S3, open ingress (0.0.0.0/0), unencrypted RDS/S3
+      - Dockerfile: using `latest` tag, running as root, missing non-root user
+      - CI/CD: secrets in YAML, unscoped tokens, or unpinned dependencies
+      - Helm/Cloud configs: insecure defaults, lack of parameterization
+
+    ⚙️ **Expected Output**
+      Respond ONLY with a **valid JSON array** of review suggestions.
+      Each object must include:
+      [
+        {
+          "line": number,
+          "comment": "specific actionable feedback"
+        }
+      ]
+
+    The goal is to produce **actionable**, **line-specific**, and **security-aware**
+    review feedback across application code, infrastructure, and DevSecOps configuration.
     """
     file_content = dspy.InputField(desc="Full source code of the file.")
     filename = dspy.InputField(desc="File name including extension (e.g., .java, .py, .go).")
@@ -82,7 +116,6 @@ def scan_content_for_secrets(content, filename):
         (r"(?i)^[A-Z0-9_]*SECRET[A-Z0-9_]*\s*=\s*.+", "Secret Variable in Env/Properties File"),
         (r"(?i)^[A-Z0-9_]*PASSWORD[A-Z0-9_]*\s*=\s*.+", "Password Variable in Env/Properties File"),
         (r"(?i)^[A-Z0-9_]*TOKEN[A-Z0-9_]*\s*=\s*.+", "Token Variable in Env/Properties File"),
-        (r"(?i)\bstring\s+\w+\s*=\s*['\"]{1}['\"]{1}", "Empty String Initialization (Potential Placeholder)"),
     ]
 
     findings = []
@@ -153,6 +186,13 @@ def check_security_vulnerabilities(file_obj, file_content):
                 f"- **{vuln_id}** — {desc.split('.')[0]}."
                 for vuln_id, _, desc in vulns
             ])
+            cve_count = len(vulns)
+            collapsed_block = (
+            f"<details>\n"
+            f"<summary>{cve_count} vulnerabilities found</summary>\n\n"
+            f"{vuln_details}\n\n"
+            f"</details>"
+        )
 
             for i, line in enumerate(file_content.splitlines(), 1):
                 if name in line:
@@ -162,7 +202,7 @@ def check_security_vulnerabilities(file_obj, file_content):
                             f"🚨 **Vulnerabilities detected in dependency**\n"
                             f"**Package:** `{name}` `{version}`\n"
                             f"**Ecosystem:** {ecosystem}\n\n"
-                            f"{vuln_details}\n\n"
+                            f"{collapsed_block}\n\n"
                             f"**Recommendation:** Update to a secure version or check upstream advisories."
                         ),
                         "kind": "vuln",
@@ -178,7 +218,6 @@ def check_security_vulnerabilities(file_obj, file_content):
             'line': secret['line'],
             'comment': (
                 f"🔐 **Security Risk:** {secret['message']}\n"
-                f"**Found:** `{secret['content']}`\n"
                 f"**Recommendation:** Remove hardcoded credentials and use environment variables or a secret manager."
             ),
             'kind': 'secret'
@@ -357,14 +396,8 @@ def run_pr_agent():
     if all_comments:
         body = f"🤖 **Agentic AI Review Summary (commit `{commit_sha}`)**\n\n"
         if security_summary:
-            total_issues = sum(c for _, c, _ in security_summary)
-            body += f"🚨 **Detected {total_issues} security issues across {len(security_summary)} files.**\n\n"
-            for filename, count, comments in security_summary:
-                body += f"<details><summary>{filename} ({count} issues)</summary>\n\n"
-                for sc in comments:
-                    body += f"{sc['comment']}\n\n"
-                body += "</details>\n\n"
-        body += "🧠 **Code Quality Suggestions** are posted inline below.\n"
+            body += f"🚨 **Detected potential security risks.**\n\n"
+        body += "🧠 **Code quality and best practice suggestions are provided below.**  \n"
         delete_previous_bot_comments(pr)
         safe_post_review(pr, body, all_comments)
     else:
