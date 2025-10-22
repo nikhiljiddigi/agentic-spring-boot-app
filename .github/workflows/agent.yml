@@ -2,7 +2,7 @@ name: Agentic PR Review
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, labeled]
+    types: [labeled, synchronize]
 
 jobs:
   review:

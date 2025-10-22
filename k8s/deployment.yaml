@@ -17,4 +17,3 @@ spec:
           image: springboot-agentic:latest
           ports:
             - containerPort: 8080
-          # intentionally missing resources limits -> to trigger agent comment
