@@ -1,0 +1,40 @@
+name: Agentic PR Review
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+jobs:
+  review:
+    # ✅ Only run when our agent is added as reviewer
+    if: contains(github.event.pull_request.labels.*.name, 'agentic-review')
+
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: 🧰 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install --only-binary=:all: "aiohttp>=3.9.5"
+          pip install dspy PyGithub requests
+
+      - name: 🤖 Run Agentic PR Reviewer
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python agents/pr_reviewer.py
