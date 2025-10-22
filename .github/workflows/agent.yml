@@ -2,12 +2,13 @@ name: Agentic PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, review_requested]
+    types: [opened, reopened, synchronize, labeled]
 
 jobs:
   review:
     # ✅ Only run when our agent is added as reviewer
-    # if: contains(github.event.pull_request.labels.*.name, 'agentic-ai-review')
+    if: contains(github.event.pull_request.labels.*.name, 'agentic-review')
+
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -30,7 +31,7 @@ jobs:
 
       - name: 🤖 Run Agentic PR Reviewer
         env:
-          GEMINI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}

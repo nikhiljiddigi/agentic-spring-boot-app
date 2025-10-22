@@ -106,6 +106,7 @@ def check_security_vulnerabilities(file_obj, file_content):
                             )
                         })
                         break
+    return security_comments
 
     # Hardcoded secrets
     secrets = scan_content_for_secrets(file_content, file_obj.filename)
