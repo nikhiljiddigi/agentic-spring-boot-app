@@ -228,7 +228,7 @@ public class UsersApiTest {
         .body("user.username", equalTo(username))
         .body("user.bio", equalTo(""))
         .body("user.image", equalTo(defaultAvatar))
-        .body("user.token", equalTo("123"));
+        .body("user.token", equalTo("WRONG_TOKEN"));
     ;
   }
 
