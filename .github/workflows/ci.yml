@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     # run this job only if the build job concluded with 'failure'
-    if: ${{ needs.build.conclusion == 'failure' }}
+    if: ${{ always() && (needs.build.result == 'failure' || needs.build.conclusion == 'failure') }}
     steps:
       - name: Checkout (for analyzer code)
         uses: actions/checkout@v4
@@ -80,23 +80,23 @@ jobs:
       - name: Install analyzer requirements
         run: |
           python -m pip install --upgrade pip
-          pip install -r pyyaml || true
+          pip install dspy pyyaml
 
       - name: Run pipeline analyzer (Gemini/DSPy or fallback)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
         run: |
           # ensure analyzer accepts --artifacts and --output
-          python agents/pipeline_rca.py --artifacts artifacts/ci --output pipeline_report.md || true
+          python -u agents/pipeline_rca.py --artifacts artifacts/ci --output pipeline_report.md 
           echo "=== pipeline_report.md (first 200 lines) ==="
-          sed -n '1,200p' pipeline_report.md || true
+          sed -n '1,200p' pipeline_report.md 
 
       - name: Post pipeline report to PR
         # uses GitHub token via the action context
         uses: actions/github-script@v6
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.AGENTIC_GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
             const repo = context.repo.owner + '/' + context.repo.repo;
