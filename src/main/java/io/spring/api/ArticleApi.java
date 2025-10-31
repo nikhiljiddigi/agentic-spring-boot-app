@@ -24,8 +24,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-String temp = "";
-
 @RestController
 @RequestMapping(path = "/articles/{slug}")
 @AllArgsConstructor

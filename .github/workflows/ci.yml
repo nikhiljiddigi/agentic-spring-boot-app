@@ -42,6 +42,11 @@ jobs:
         run: |
           # run Gradle, capture stdout+stderr to artifacts/ci/build.log (will exist even if gradle fails)
           ./gradlew clean test 2>&1 | tee artifacts/ci/build.log
+          GRADLE_EXIT=${PIPESTATUS[0]}
+          if [ $GRADLE_EXIT -ne 0 ]; then
+            echo "Gradle failed with exit code $GRADLE_EXIT"
+            exit $GRADLE_EXIT
+          fi
 
       # Upload artifact only on failure of the job
       - name: Upload logs for analyzer (only on failure)
@@ -50,10 +55,6 @@ jobs:
         with:
           name: build-logs
           path: artifacts/ci
-
-      - name: Build summary
-        if: always()
-        run: echo "Build job finished (conclusion: ${{ job.status }})"
 
   analyze:
     name: Pipeline Analyzer
