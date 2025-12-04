@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentic-spring-boot-app
+  labels:
+    app: agentic-spring-boot-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentic-spring-boot-app
+  template:
+    metadata:
+      labels:
+        app: agentic-spring-boot-app
+    spec:
+      containers:
+        - name: agentic-spring-boot-app
+          image: ghcr.io/nikhiljiddigi/agentic-spring-boot-app:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            # add any env vars you need here
+            - name: SPRING_PROFILES_ACTIVE
+              value: "default"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentic-spring-boot-app
+spec:
+  selector:
+    app: agentic-spring-boot-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
