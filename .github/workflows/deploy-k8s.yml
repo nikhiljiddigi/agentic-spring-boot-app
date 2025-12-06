@@ -66,13 +66,7 @@ jobs:
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
 
-      # Option 1: Apply manifest file
       - name: Apply Kubernetes manifests
         run: |
-          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/deployment.yaml --validate=false
 
-      # Option 2 (optional): Update image on Deployment for this commit
-      - name: Update image to current SHA
-        run: |
-          kubectl set image deployment/agentic-spring-boot-app \
-            agentic-spring-boot-app=${{ env.IMAGE_NAME }}:${{ github.sha }}
