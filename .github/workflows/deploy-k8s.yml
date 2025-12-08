@@ -37,6 +37,8 @@ jobs:
           echo "Kubeconfig server endpoints:"
           grep "server:" ~/.kube/config || echo "No server line found"
 
+          cat ~/.kube/config
+
       - name: Test cluster connectivity
         env:
           KUBECONFIG: $HOME/.kube/config
