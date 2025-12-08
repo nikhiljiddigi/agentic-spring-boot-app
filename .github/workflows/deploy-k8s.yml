@@ -41,7 +41,6 @@ jobs:
         env:
           KUBECONFIG: $HOME/.kube/config
         run: |
-          kubectl config current-context || echo "No current context"
           kubectl cluster-info
 
       - name: Use kubectl
