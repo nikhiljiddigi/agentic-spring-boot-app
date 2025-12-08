@@ -66,7 +66,10 @@ jobs:
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
 
-      - name: Apply Kubernetes manifests
+      - name: Use kubectl
+        env:
+          KUBECONFIG: $HOME/.kube/config
         run: |
+          kubectl cluster-info
           kubectl apply -f k8s/deployment.yaml --validate=false
 
