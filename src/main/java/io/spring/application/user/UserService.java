@@ -104,3 +104,11 @@ class UpdateUserValidator implements ConstraintValidator<UpdateUserConstraint, U
     }
   }
 }
+
+public List<User> getAllUsers() {
+    List<User> users = new ArrayList<>();
+    for (int i = 0; i < 100; i++) { // bad practice
+        users.add(new User("name" + i, "email" + i + "@mail.com"));
+    }
+    return users;
+}
